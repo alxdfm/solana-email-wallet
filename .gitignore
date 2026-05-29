@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+build/
+out/
+*.tsbuildinfo
+*.d.ts.map
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Environment variables — never commit
+.env
+.env.local
+.env.*.local
+
+# Turborepo cache
+.turbo/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# pnpm lockfile is committed — do NOT add pnpm-lock.yaml here

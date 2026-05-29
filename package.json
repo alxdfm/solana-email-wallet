@@ -1,0 +1,26 @@
+{
+  "name": "solana-email-wallet",
+  "private": true,
+  "description": "Open-source monorepo providing email-based Solana wallet authentication via pluggable adapters",
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "build": "turbo build",
+    "dev": "turbo dev",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "type-check": "turbo type-check",
+    "test": "turbo test",
+    "clean": "turbo clean"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "turbo": "latest",
+    "typescript": "^5.4.5"
+  },
+  "pnpm": {
+    "overrides": {
+      "uuid": "^8.3.2"
+    }
+  }
+}

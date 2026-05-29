@@ -1,0 +1,33 @@
+{
+  "name": "@callydus/email-wallet-adapter-privy",
+  "version": "0.1.0",
+  "description": "Privy adapter stub for @callydus/email-wallet-core — not yet implemented",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --project tsconfig.json",
+    "type-check": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@callydus/email-wallet-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@solana/web3.js": "^1.98.0"
+  },
+  "devDependencies": {
+    "@solana/web3.js": "^1.98.4",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.5"
+  }
+}
