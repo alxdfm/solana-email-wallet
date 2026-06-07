@@ -168,9 +168,15 @@ export class OpenfortAdapter implements EmailWalletAdapter {
    *
    * ## Authentication
    *
-   * Calls `auth.logInWithEmailPassword` where the `otp` parameter is used as
-   * the password. This requires the user to have an Openfort account with that
-   * email (created via `auth.signUpWithEmailPassword` on first use).
+   * The Openfort SDK v0.9.x uses email+password auth. The `otp` parameter is a
+   * one-time password generated and delivered by the caller's backend. This adapter
+   * tries `logInWithEmailPassword` first; if the account doesn't exist yet, it falls
+   * back to `signUpWithEmailPassword` to create it.
+   *
+   * The caller's backend is responsible for:
+   * 1. Generating a secure random password per user (stored and reused across sessions)
+   * 2. Sending it to the user via email (as the "OTP code")
+   * 3. Verifying any rate limiting / abuse prevention before calling this method
    *
    * ## Wallet lifecycle
    *
@@ -179,7 +185,7 @@ export class OpenfortAdapter implements EmailWalletAdapter {
    * - `EmbeddedState.READY` (4): Subsequent sign-in — wallet already exists
    *
    * @param email - The user's email address.
-   * @param otp   - The one-time password (or regular password for testing).
+   * @param otp   - The one-time password generated and emailed by the caller's backend.
    * @returns The authenticated `WalletAccount`.
    * @throws {AuthenticationError} If authentication fails.
    * @throws {WalletNotFoundError} If wallet cannot be created or retrieved.
@@ -187,11 +193,17 @@ export class OpenfortAdapter implements EmailWalletAdapter {
   async signIn(email: string, otp: string): Promise<WalletAccount> {
     try {
       await this.openfort.auth.logInWithEmailPassword({ email, password: otp });
-    } catch (err) {
-      throw new AuthenticationError(
-        `Authentication failed for ${email}: ${errorMessage(err)}`,
-        err,
-      );
+    } catch {
+      // Login failed — account may not exist yet. Attempt signup.
+      // If signup also fails, the error from signup is the meaningful one.
+      try {
+        await this.openfort.auth.signUpWithEmailPassword({ email, password: otp });
+      } catch (signupErr) {
+        throw new AuthenticationError(
+          `Authentication failed for ${email}: ${errorMessage(signupErr)}`,
+          signupErr,
+        );
+      }
     }
 
     // After successful auth, check the embedded wallet state.

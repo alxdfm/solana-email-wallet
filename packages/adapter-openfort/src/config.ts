@@ -70,8 +70,8 @@ export const openfortAdapterConfigSchema = z.object({
   /**
    * Your Openfort Shield publishable key.
    *
-   * Format: `shpk_...`
    * Found in your Openfort dashboard under Shield > Configuration.
+   * The format varies by Openfort account — it may be a UUID or start with `shpk_`.
    *
    * Openfort Shield is the recovery infrastructure that allows wallets to be
    * recovered automatically across sessions without the user storing a seed phrase.
@@ -79,8 +79,7 @@ export const openfortAdapterConfigSchema = z.object({
    */
   shieldPublishableKey: z
     .string()
-    .min(1, 'shieldPublishableKey is required')
-    .startsWith('shpk_', 'shieldPublishableKey must start with "shpk_"'),
+    .min(1, 'shieldPublishableKey is required'),
 });
 
 /**
