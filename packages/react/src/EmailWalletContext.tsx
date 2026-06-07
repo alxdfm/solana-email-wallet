@@ -239,7 +239,7 @@ export interface EmailWalletProviderProps {
 export function EmailWalletProvider({
   client,
   children,
-}: EmailWalletProviderProps): React.ReactElement {
+}: EmailWalletProviderProps): React.JSX.Element {
   // ─── State ───────────────────────────────────────────────────────────────
 
   /**
