@@ -61,7 +61,11 @@ import {
 } from '@openfort/openfort-js';
 import { PublicKey, Transaction, type VersionedTransaction } from '@solana/web3.js';
 import bs58 from 'bs58';
-import { type OpenfortAdapterConfig, openfortAdapterConfigSchema } from './config.js';
+import {
+  type GetEncryptionSession,
+  type OpenfortAdapterConfig,
+  openfortAdapterConfigSchema,
+} from './config.js';
 
 /**
  * Implements `EmailWalletAdapter` using the Openfort SDK v1.x.
@@ -96,6 +100,17 @@ export class OpenfortAdapter implements EmailWalletAdapter {
   private readonly openfort: Openfort;
 
   /**
+   * Optional callback that fetches a single-use `encryptionSession` token from
+   * the application backend to enable `RecoveryMethod.AUTOMATIC`.
+   *
+   * Stored from config and called lazily on first wallet creation (never on
+   * subsequent sign-ins because the wallet already exists).
+   *
+   * @internal
+   */
+  private readonly getEncryptionSession: GetEncryptionSession | undefined;
+
+  /**
    * Creates a new `OpenfortAdapter`.
    *
    * Validates the configuration using Zod and initializes the Openfort SDK.
@@ -124,6 +139,8 @@ export class OpenfortAdapter implements EmailWalletAdapter {
         shieldPublishableKey: parsed.data.shieldPublishableKey,
       }),
     });
+
+    this.getEncryptionSession = parsed.data.getEncryptionSession;
   }
 
   // ─── OTP Flow ─────────────────────────────────────────────────────────────
@@ -188,27 +205,10 @@ export class OpenfortAdapter implements EmailWalletAdapter {
       const state = await this.openfort.embeddedWallet.getEmbeddedState();
 
       if (state === EmbeddedState.EMBEDDED_SIGNER_NOT_CONFIGURED) {
-        // First sign-in: create the Solana EOA wallet.
-        // EOA (Externally Owned Account) = standard keypair for Solana.
-        // SVM (Solana Virtual Machine) = tells Openfort to use Ed25519.
-        //
-        // TODO(EW-05): RecoveryMethod.AUTOMATIC requires a backend endpoint
-        // to generate an `encryptionSession` via the Openfort Shield API.
-        // Until that endpoint exists, we use RecoveryMethod.PASSWORD with a
-        // per-email password stored in localStorage. This ensures the same
-        // browser always recovers the same wallet (consistent address).
-        // Limitation: different browsers/devices will create different wallets
-        // for the same email until EW-05 is implemented.
-        // See: discoveries/openfort-adapter-gaps.md — Gap sobre encryptionSession.
-        const recoveryPassword = getOrCreateRecoveryPassword(email);
-        await this.openfort.embeddedWallet.create({
-          accountType: AccountTypeEnum.EOA,
-          chainType: ChainTypeEnum.SVM,
-          recoveryParams: {
-            recoveryMethod: RecoveryMethod.PASSWORD,
-            password: recoveryPassword,
-          },
-        });
+        // Signer not configured locally — either new user or returning user who
+        // lost local shares (cache cleared, new browser). setupEmbeddedWallet()
+        // detects which case and calls create() or configure() accordingly.
+        await this.setupEmbeddedWallet(email);
       } else if (state === EmbeddedState.READY) {
         // Wallet already exists — no action needed.
       } else if (state === EmbeddedState.CREATING_ACCOUNT) {
@@ -234,6 +234,11 @@ export class OpenfortAdapter implements EmailWalletAdapter {
   /**
    * Signs out the current user.
    *
+   * Also cleans up legacy `__openfort_rp_*` localStorage keys left by the
+   * PASSWORD recovery workaround (pre-EW-05). Once all users are on
+   * AUTOMATIC recovery these keys won't be created anymore, but old ones
+   * should still be cleared on logout.
+   *
    * @throws {AuthenticationError} If the sign-out request fails.
    */
   async signOut(): Promise<void> {
@@ -241,6 +246,12 @@ export class OpenfortAdapter implements EmailWalletAdapter {
       await this.openfort.auth.logout();
     } catch (err) {
       throw new AuthenticationError(`Sign-out failed: ${errorMessage(err)}`, err);
+    }
+    // Migration cleanup: remove legacy per-email recovery passwords
+    if (typeof localStorage !== 'undefined') {
+      for (const key of Object.keys(localStorage)) {
+        if (key.startsWith('__openfort_rp_')) localStorage.removeItem(key);
+      }
     }
   }
 
@@ -366,6 +377,145 @@ export class OpenfortAdapter implements EmailWalletAdapter {
       throw new WalletNotFoundError(
         'The embedded wallet is not ready. Authenticate first with requestOtp() and signIn().',
       );
+    }
+  }
+
+  /**
+   * Sets up the Solana EOA embedded wallet — creates it on first sign-in or
+   * recovers it when local signer shares were lost (cache cleared, new browser).
+   *
+   * ## How the two cases are distinguished
+   *
+   * `EmbeddedState.EMBEDDED_SIGNER_NOT_CONFIGURED` covers both:
+   *   - New user (no wallet ever created)
+   *   - Returning user who cleared cache / switched browser
+   *
+   * We call `embeddedWallet.list()` — an authenticated API call that returns
+   * all accounts on Openfort's servers regardless of local signer state.
+   * If a SVM account exists → returning user → `configure()` (recovers shares).
+   * If no SVM account exists → new user → `create()` (new wallet).
+   *
+   * ## Why encryptionSession is fetched after the list check
+   *
+   * `encryptionSession` is a single-use token. Fetching it before knowing
+   * whether we need `configure()` or `create()` would waste it if an error
+   * occurs in the list check. We fetch it only once, for the correct operation.
+   *
+   * ## Recovery strategy
+   *
+   * Prefers `RecoveryMethod.AUTOMATIC` when `getEncryptionSession` is configured:
+   * the backend fetches the token from Openfort Shield using server-side secrets,
+   * enabling cross-device and cross-browser wallet recovery for the same email.
+   *
+   * Falls back to `RecoveryMethod.PASSWORD` when no callback is configured:
+   * uses a per-email UUID stored in localStorage — consistent within the same
+   * browser only (different browsers generate different wallets).
+   *
+   * @param email - The authenticated user's email address.
+   * @throws {WalletNotFoundError} If the encryption session fetch or SDK call fails.
+   */
+  /**
+   * Sets up the Solana EOA embedded wallet — creates it on first sign-in or
+   * recovers it when local signer shares were lost (cache cleared, new browser).
+   *
+   * ## Safety invariant
+   *
+   * If the user already has a SVM wallet on Openfort's servers, `create()` is
+   * NEVER called — doing so would generate a new keypair and silently orphan
+   * any funds in the original wallet. This method enforces this invariant:
+   *
+   *   list() result    | action
+   *   ─────────────────┼──────────────────────────────────────────────
+   *   no SVM account   | create()  — new user, safe to create
+   *   SVM account found| configure() — recover local signer from Shield
+   *   list() throws    | abort — never guess, never create blindly
+   *
+   * The `list()` error is propagated rather than swallowed: a transient network
+   * failure is much safer to surface as a login error than to silently create a
+   * new empty wallet on top of one that may hold real funds.
+   *
+   * ## Why encryptionSession is fetched after the list check
+   *
+   * `encryptionSession` is a single-use token. We only fetch it after confirming
+   * whether we need configure() or create(), so it's consumed exactly once.
+   *
+   * @param email - The authenticated user's email address.
+   * @throws {WalletNotFoundError} On list() failure, encryption session fetch failure,
+   *   or if the user has an existing wallet but cross-device recovery is not configured.
+   */
+  private async setupEmbeddedWallet(email: string): Promise<void> {
+    // CRITICAL: this call must NOT be silenced. If list() fails for any reason
+    // (network error, auth expired), we abort rather than risk creating a duplicate
+    // wallet. A login error is recoverable; a lost wallet address is not.
+    let accounts: Awaited<ReturnType<typeof this.openfort.embeddedWallet.list>>;
+    try {
+      accounts = await this.openfort.embeddedWallet.list();
+    } catch (err) {
+      throw new WalletNotFoundError(
+        `Could not verify existing wallets — aborting to prevent duplicate wallet creation. Please try again. (${errorMessage(err)})`,
+        err,
+      );
+    }
+
+    const hasSvmWallet = accounts.some((a) => a.chainType === ChainTypeEnum.SVM);
+
+    if (this.getEncryptionSession) {
+      let encryptionSession: string;
+      try {
+        encryptionSession = await this.getEncryptionSession();
+      } catch (err) {
+        throw new WalletNotFoundError(
+          `Failed to fetch encryption session: ${errorMessage(err)}`,
+          err,
+        );
+      }
+
+      if (hasSvmWallet) {
+        // Returning user on new device / cleared cache.
+        // configure() reconstructs the local signer from the Shield server share + auth token share.
+        await this.openfort.embeddedWallet.configure({
+          chainType: ChainTypeEnum.SVM,
+          accountType: AccountTypeEnum.EOA,
+          recoveryParams: { recoveryMethod: RecoveryMethod.AUTOMATIC, encryptionSession },
+        });
+      } else {
+        // New user — create the Solana EOA wallet for the first time.
+        await this.openfort.embeddedWallet.create({
+          accountType: AccountTypeEnum.EOA,
+          chainType: ChainTypeEnum.SVM,
+          recoveryParams: { recoveryMethod: RecoveryMethod.AUTOMATIC, encryptionSession },
+        });
+      }
+    } else {
+      // PASSWORD fallback (no server-side recovery configured).
+      if (hasSvmWallet) {
+        // Existing wallet found but AUTOMATIC recovery is not configured.
+        // Attempting configure() with PASSWORD requires the original password —
+        // which only exists in the original browser's localStorage.
+        const recoveryPassword = localStorage.getItem(`__openfort_rp_${email}`) ?? undefined;
+        if (!recoveryPassword) {
+          // Cannot recover cross-device without AUTOMATIC. Fail loudly — do NOT
+          // create a new wallet, which would orphan the existing one and its funds.
+          throw new WalletNotFoundError(
+            'Your email wallet exists but cannot be recovered on this browser. ' +
+              'Cross-device recovery requires the server-side Shield endpoint. ' +
+              'Return to your original browser or contact support.',
+          );
+        }
+        await this.openfort.embeddedWallet.configure({
+          chainType: ChainTypeEnum.SVM,
+          accountType: AccountTypeEnum.EOA,
+          recoveryParams: { recoveryMethod: RecoveryMethod.PASSWORD, password: recoveryPassword },
+        });
+      } else {
+        // New user on PASSWORD fallback — create wallet.
+        const recoveryPassword = getOrCreateRecoveryPassword(email);
+        await this.openfort.embeddedWallet.create({
+          accountType: AccountTypeEnum.EOA,
+          chainType: ChainTypeEnum.SVM,
+          recoveryParams: { recoveryMethod: RecoveryMethod.PASSWORD, password: recoveryPassword },
+        });
+      }
     }
   }
 

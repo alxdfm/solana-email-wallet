@@ -35,6 +35,26 @@
 import { z } from 'zod';
 
 /**
+ * Async callback that fetches a single-use `encryptionSession` token from the
+ * application backend (which calls Openfort Shield server-side).
+ *
+ * When provided, the adapter uses `RecoveryMethod.AUTOMATIC` — wallets are
+ * recoverable across browsers and devices without any seed phrase.
+ *
+ * When omitted, the adapter falls back to `RecoveryMethod.PASSWORD` (same-browser only).
+ *
+ * ## Why a callback?
+ *
+ * The `encryptionSession` token is single-use and must be fetched fresh each time
+ * a wallet is created (first sign-in). Accepting a callback keeps the adapter
+ * decoupled from the application's HTTP client and error handling.
+ *
+ * @returns A Promise resolving to the `encryptionSession` string.
+ * @throws Any error propagates up — the adapter maps it to `WalletNotFoundError`.
+ */
+export type GetEncryptionSession = () => Promise<string>;
+
+/**
  * Zod schema for validating `OpenfortAdapterConfig`.
  *
  * Validates:
@@ -80,6 +100,19 @@ export const openfortAdapterConfigSchema = z.object({
   shieldPublishableKey: z
     .string()
     .min(1, 'shieldPublishableKey is required'),
+
+  /**
+   * Optional async callback that returns a single-use `encryptionSession` token
+   * fetched from the application backend.
+   *
+   * When provided: wallet creation uses `RecoveryMethod.AUTOMATIC` (cross-device recovery).
+   * When omitted: falls back to `RecoveryMethod.PASSWORD` (same-browser only).
+   *
+   * See `GetEncryptionSession` type for the expected signature.
+   */
+  getEncryptionSession: z
+    .custom<GetEncryptionSession>((v) => typeof v === 'function')
+    .optional(),
 });
 
 /**
