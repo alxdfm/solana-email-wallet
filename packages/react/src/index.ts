@@ -25,7 +25,7 @@ export { EmailWalletProvider } from './EmailWalletContext.js';
 export type { EmailWalletProviderProps, EmailWalletContextValue } from './EmailWalletContext.js';
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
-export { useEmailWallet } from './useEmailWallet.js';
+export { useEmailWallet, useEmailWalletSafe } from './useEmailWallet.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 export type { UseEmailWalletReturn } from './types.js';
