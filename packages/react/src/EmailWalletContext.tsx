@@ -282,16 +282,14 @@ export function EmailWalletProvider({
       const addressResult = await client.getAddress();
       if (!addressResult.success || cancelled) return;
 
-      // We don't have the email from a restored session — use empty string as placeholder.
-      // In a real app, you might store the email in localStorage or derive it from
-      // the provider's session data.
-      setWallet({ address: addressResult.data, email: '' });
+      // Recover the email from localStorage so the UI can display it after a page reload.
+      // The email is persisted by the signIn handler and cleared by signOut.
+      const storedEmail = localStorage.getItem('__ew_email') ?? '';
+      setWallet({ address: addressResult.data, email: storedEmail });
     }
 
     void restoreSession();
 
-    // Cleanup function: if the component unmounts before the async work completes,
-    // we set `cancelled = true` to avoid calling `setWallet` on an unmounted component.
     return () => {
       cancelled = true;
     };
@@ -334,6 +332,7 @@ export function EmailWalletProvider({
       try {
         const result = await client.signIn(email, otp);
         if (result.success) {
+          localStorage.setItem('__ew_email', result.data.email);
           setWallet(result.data);
         } else {
           setError(result.error);
@@ -354,6 +353,7 @@ export function EmailWalletProvider({
     try {
       const result = await client.signOut();
       if (result.success) {
+        localStorage.removeItem('__ew_email');
         setWallet(null);
       } else {
         setError(result.error);
