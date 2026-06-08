@@ -195,10 +195,12 @@ export class OpenfortAdapter implements EmailWalletAdapter {
         // TODO(EW-05): RecoveryMethod.AUTOMATIC requires a backend endpoint
         // to generate an `encryptionSession` via the Openfort Shield API.
         // Until that endpoint exists, we use RecoveryMethod.PASSWORD with a
-        // randomly generated password. This means wallet key export/recovery
-        // is not supported in this version — only regular OTP login works.
+        // per-email password stored in localStorage. This ensures the same
+        // browser always recovers the same wallet (consistent address).
+        // Limitation: different browsers/devices will create different wallets
+        // for the same email until EW-05 is implemented.
         // See: discoveries/openfort-adapter-gaps.md — Gap sobre encryptionSession.
-        const recoveryPassword = crypto.randomUUID();
+        const recoveryPassword = getOrCreateRecoveryPassword(email);
         await this.openfort.embeddedWallet.create({
           accountType: AccountTypeEnum.EOA,
           chainType: ChainTypeEnum.SVM,
@@ -259,8 +261,12 @@ export class OpenfortAdapter implements EmailWalletAdapter {
     await this.assertReady();
 
     try {
-      if (tx instanceof Transaction) {
-        return (await this.signLegacyTransaction(tx)) as T;
+      // `instanceof Transaction` falha quando o Anchor e o adapter carregam instâncias
+      // diferentes de @solana/web3.js (problema de deduplicação entre workspaces).
+      // Duck typing é mais confiável: `serializeMessage` existe apenas em Transaction legado,
+      // enquanto VersionedTransaction expõe `message.serialize()`.
+      if ('serializeMessage' in tx && typeof (tx as Transaction).serializeMessage === 'function') {
+        return (await this.signLegacyTransaction(tx as unknown as Transaction)) as T;
       }
       return (await this.signVersionedTransaction(tx as VersionedTransaction)) as T;
     } catch (err) {
@@ -489,4 +495,25 @@ async function waitForReady(openfort: Openfort): Promise<void> {
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/**
+ * Returns a stable recovery password for the given email, creating one if needed.
+ *
+ * Stored in localStorage so the same browser always recovers the same wallet.
+ * Temporary workaround until EW-05 implements RecoveryMethod.AUTOMATIC via the
+ * Shield API — at which point this function and its localStorage key can be removed.
+ *
+ * @param email - The authenticated user's email address.
+ * @returns A UUID string used as the Shield recovery password.
+ *
+ * @internal
+ */
+function getOrCreateRecoveryPassword(email: string): string {
+  const key = `__openfort_rp_${email}`;
+  const stored = localStorage.getItem(key);
+  if (stored) return stored;
+  const password = crypto.randomUUID();
+  localStorage.setItem(key, password);
+  return password;
 }
