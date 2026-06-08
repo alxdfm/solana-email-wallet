@@ -173,10 +173,14 @@ export class OpenfortAdapter implements EmailWalletAdapter {
     try {
       await this.openfort.auth.logInWithEmailOtp({ email, otp });
     } catch (err) {
-      throw new AuthenticationError(
-        `OTP verification failed for ${email}: ${errorMessage(err)}`,
-        err,
-      );
+      // "Already logged in" means a previous session is still active (e.g. wallet
+      // creation failed mid-flow). The user IS authenticated — proceed to wallet check.
+      if (!errorMessage(err).toLowerCase().includes('already logged in')) {
+        throw new AuthenticationError(
+          `OTP verification failed for ${email}: ${errorMessage(err)}`,
+          err,
+        );
+      }
     }
 
     // After successful auth, check the embedded wallet state.
